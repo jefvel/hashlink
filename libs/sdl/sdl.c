@@ -226,7 +226,7 @@ HL_PRIM bool HL_NAME(event_loop)( event_data *event ) {
 			case SDL_WINDOWEVENT_MOVED:
 				event->state = Move;
 				break;
-			case SDL_WINDOWEVENT_RESIZED:
+			case SDL_WINDOWEVENT_SIZE_CHANGED:
 				event->state = Resize;
 				break;
 			case SDL_WINDOWEVENT_MINIMIZED:
