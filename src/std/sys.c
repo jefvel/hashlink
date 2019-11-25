@@ -157,7 +157,20 @@ HL_PRIM void hl_sys_print( vbyte *msg ) {
 	hl_blocking(false);
 }
 
+
+static void *f_before_exit = NULL;
+static void *f_profile_event = NULL;
+HL_PRIM void hl_setup_profiler( void *profile_event, void *before_exit ) {
+	f_before_exit = before_exit;
+	f_profile_event = profile_event;
+}
+
+HL_PRIM void hl_sys_profile_event( int code, vbyte *data, int dataLen ) {
+	if( f_profile_event ) ((void(*)(int,vbyte*,int))f_profile_event)(code,data,dataLen);
+}
+
 HL_PRIM void hl_sys_exit( int code ) {
+	if( f_before_exit ) ((void(*)())f_before_exit)();
 	exit(code);
 }
 
@@ -682,3 +695,4 @@ DEFINE_PRIM(_I32, sys_get_char, _BOOL);
 DEFINE_PRIM(_ARR, sys_args, _NO_ARG);
 DEFINE_PRIM(_I32, sys_getpid, _NO_ARG);
 DEFINE_PRIM(_BOOL, sys_check_reload, _NO_ARG);
+DEFINE_PRIM(_VOID, sys_profile_event, _I32 _BYTES _I32);
