@@ -118,6 +118,7 @@ typedef struct {
 typedef struct {
 	hl_code *code;
 	int codesize;
+	int globals_size;
 	int *globals_indexes;
 	unsigned char *globals_data;
 	void **functions_ptrs;
@@ -136,6 +137,7 @@ void hl_code_hash_finalize( hl_code_hash *h );
 void hl_code_hash_free( hl_code_hash *h );
 void hl_code_free( hl_code *c );
 int hl_code_hash_type( hl_code_hash *h, hl_type *t );
+void hl_code_hash_remap_globals( hl_code_hash *hnew, hl_code_hash *hold );
 
 const uchar *hl_get_ustring( hl_code *c, int index );
 const char* hl_op_name( int op );
