@@ -73,7 +73,7 @@ static int_val gc_hash( void *ptr ) {
 #	define GC_MEMCHK
 #endif
 
-#if defined(HL_NX)
+#if defined(HL_NX) || defined(HL_PS)
 #	define GC_INTERIOR_POINTERS
 #endif
 
@@ -214,6 +214,13 @@ static void gc_save_context(hl_thread_info *t, void *prev_stack ) {
 	// to gc_save_context (or before) which might hold a gc value !
 	// let's capture them immediately in extra per-thread data
 	t->stack_cur = &prev_stack;
+
+	// We have no guarantee prev_stack is pointer-aligned
+	// All calls are passing a pointer to a bool, which is aligned on 1 byte
+	// If pointer is wrongly aligned, the extra_stack_data is misaligned
+	// and register pointers save in stack will not be discovered correctly by the GC
+	uintptr_t aligned_prev_stack = ((uintptr_t)prev_stack) & ~(sizeof(void*) - 1);
+	prev_stack = (void*)aligned_prev_stack;
 	int size = (int)((char*)prev_stack - (char*)stack_cur) / sizeof(void*);
 	if( size > HL_MAX_EXTRA_STACK ) hl_fatal("GC_SAVE_CONTEXT");
 	t->extra_stack_size = size;
@@ -762,6 +769,12 @@ static void hl_gc_init() {
 #	endif
 }
 
+static void hl_gc_free() {
+#	ifdef HL_THREADS
+	hl_remove_root(&gc_threads.global_lock);
+#	endif
+}
+
 // ---- UTILITIES ----------------------
 
 HL_API bool hl_is_blocking() {
@@ -806,6 +819,7 @@ void hl_global_init() {
 
 void hl_global_free() {
 	hl_cache_free();
+	hl_gc_free();
 }
 
 struct hl_alloc_block {

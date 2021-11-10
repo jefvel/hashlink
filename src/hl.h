@@ -224,8 +224,8 @@ typedef wchar_t	uchar;
 #	define ustrlen		wcslen
 #	define ustrdup		_wcsdup
 HL_API int uvszprintf( uchar *out, int out_size, const uchar *fmt, va_list arglist );
-#	define utod(s,end)	wcstod(s,end)
-#	define utoi(s,end)	wcstol(s,end,10)
+#	define _utod(s,end)	wcstod(s,end)
+#	define _utoi(s,end)	wcstol(s,end,10)
 #	define ucmp(a,b)	wcscmp(a,b)
 #	define utostr(out,size,str) wcstombs(out,str,size)
 #elif defined(HL_MAC)
@@ -247,19 +247,19 @@ typedef char16_t uchar;
 #	define USTR(str)	u##str
 #endif
 
-#ifndef HL_NATIVE_UCHAR_FUN
 C_FUNCTION_BEGIN
-HL_API int ustrlen( const uchar *str );
-HL_API uchar *ustrdup( const uchar *str );
 HL_API double utod( const uchar *str, uchar **end );
 HL_API int utoi( const uchar *str, uchar **end );
+#ifndef HL_NATIVE_UCHAR_FUN
+HL_API int ustrlen( const uchar *str );
+HL_API uchar *ustrdup( const uchar *str );
 HL_API int ucmp( const uchar *a, const uchar *b );
 HL_API int utostr( char *out, int out_size, const uchar *str );
 HL_API int usprintf( uchar *out, int out_size, const uchar *fmt, ... );
 HL_API int uvszprintf( uchar *out, int out_size, const uchar *fmt, va_list arglist );
 HL_API void uprintf( const uchar *fmt, const uchar *str );
-C_FUNCTION_END
 #endif
+C_FUNCTION_END
 
 #if defined(HL_VCC)
 #	define hl_debug_break()	if( IsDebuggerPresent() ) __debugbreak()
@@ -528,7 +528,9 @@ struct hl_runtime_obj {
 	vdynamic *(*getFieldFun)( vdynamic *obj, int hfield );
 	// relative
 	int nlookup;
+	int ninterfaces;
 	hl_field_lookup *lookup;
+	int *interfaces;
 };
 
 typedef struct {
@@ -748,7 +750,7 @@ HL_API void hl_throw_buffer( hl_buffer *b );
 // ----------------------- FFI ------------------------------------------------------
 
 // match GNU C++ mangling
-#define TYPE_STR	"vcsilfdbBDPOATR??X?N"
+#define TYPE_STR	"vcsilfdbBDPOATR??X?N?S"
 
 #undef  _VOID
 #define _NO_ARG
@@ -770,6 +772,7 @@ HL_API void hl_throw_buffer( hl_buffer *b );
 #define _ABSTRACT(name)				"X" #name "_"
 #undef _NULL
 #define _NULL(t)					"N" t
+#define _STRUCT						"S"
 
 #undef _STRING
 #define _STRING						_OBJ(_BYTES _I32)
