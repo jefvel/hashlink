@@ -154,7 +154,11 @@
 #	define EXPORT __declspec( dllexport )
 #	define IMPORT __declspec( dllimport )
 #else
+#if defined(HL_GCC) || defined(HL_CLANG)
+#	define EXPORT __attribute__((visibility("default")))
+#else
 #	define EXPORT
+#endif
 #	define IMPORT extern
 #endif
 
@@ -182,17 +186,13 @@
 #else
 #	define C_FUNCTION_BEGIN
 #	define C_FUNCTION_END
-#	ifndef true
-#		define true 1
-#		define false 0
-		typedef unsigned char bool;
-#	endif
 #endif
 
 typedef intptr_t int_val;
 typedef long long int64;
 typedef unsigned long long uint64;
 
+#include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <memory.h>
@@ -237,8 +237,10 @@ typedef uint16_t uchar;
 #if defined(HL_IOS) || defined(HL_TVOS) || defined(HL_MAC)
 #include <stddef.h>
 #include <stdint.h>
+#if !defined(__cplusplus) || __cplusplus < 201103L
 typedef uint16_t char16_t;
 typedef uint32_t char32_t;
+#endif
 #else
 #	include <uchar.h>
 #endif
@@ -671,9 +673,13 @@ HL_API vdynamic *hl_dyn_call_safe( vclosure *c, vdynamic **args, int nargs, bool
 
 struct _hl_thread;
 struct _hl_mutex;
+struct _hl_semaphore;
+struct _hl_condition;
 struct _hl_tls;
 typedef struct _hl_thread hl_thread;
 typedef struct _hl_mutex hl_mutex;
+typedef struct _hl_semaphore hl_semaphore;
+typedef struct _hl_condition hl_condition;
 typedef struct _hl_tls hl_tls;
 
 HL_API hl_thread *hl_thread_start( void *callback, void *param, bool withGC );
@@ -687,6 +693,22 @@ HL_API void hl_mutex_acquire( hl_mutex *l );
 HL_API bool hl_mutex_try_acquire( hl_mutex *l );
 HL_API void hl_mutex_release( hl_mutex *l );
 HL_API void hl_mutex_free( hl_mutex *l );
+
+HL_API hl_semaphore *hl_semaphore_alloc(int value);
+HL_API void hl_semaphore_acquire(hl_semaphore *sem);
+HL_API bool hl_semaphore_try_acquire(hl_semaphore *sem, vdynamic *timeout);
+HL_API void hl_semaphore_release(hl_semaphore *sem);
+HL_API void hl_semaphore_free(hl_semaphore *sem);
+
+HL_API hl_condition *hl_condition_alloc();
+HL_API void hl_condition_acquire(hl_condition *cond);
+HL_API bool hl_condition_try_acquire(hl_condition *cond);
+HL_API void hl_condition_release(hl_condition *cond);
+HL_API void hl_condition_wait(hl_condition *cond);
+HL_API bool hl_condition_timed_wait(hl_condition *cond, double timeout);
+HL_API void hl_condition_signal(hl_condition *cond);
+HL_API void hl_condition_broadcast(hl_condition *cond);
+HL_API void hl_condition_free(hl_condition *cond);
 
 HL_API hl_tls *hl_tls_alloc( bool gc_value );
 HL_API void hl_tls_set( hl_tls *l, void *value );
@@ -708,6 +730,7 @@ HL_API void hl_add_root( void *ptr );
 HL_API void hl_remove_root( void *ptr );
 HL_API void hl_gc_major( void );
 HL_API bool hl_is_gc_ptr( void *ptr );
+HL_API int hl_gc_get_memsize( void *ptr );
 
 HL_API void hl_blocking( bool b );
 HL_API bool hl_is_blocking( void );
