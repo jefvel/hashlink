@@ -1231,8 +1231,8 @@ static void store( jit_ctx *ctx, vreg *r, preg *v, bool bind ) {
 }
 
 static void store_result( jit_ctx *ctx, vreg *r ) {
-	switch( r->t->kind ) {
 #	ifndef HL_64
+	switch( r->t->kind ) {
 	case HF64:
 		scratch(r->current);
 		op64(ctx,FSTP,&r->stack,UNUSED);
@@ -1245,11 +1245,13 @@ static void store_result( jit_ctx *ctx, vreg *r ) {
 		scratch(r->current);
 		error_i64();
 		break;
-#	endif
 	default:
+#	endif
 		store(ctx,r,IS_FLOAT(r) ? REG_AT(XMM(0)) : PEAX,true);
+#	ifndef HL_64
 		break;
 	}
+#	endif
 }
 
 static void op_mov( jit_ctx *ctx, vreg *to, vreg *from ) {
@@ -3381,6 +3383,15 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 					{
 						hl_runtime_obj *rt = hl_get_obj_rt(ra->t);
 						preg *rr = alloc_cpu(ctx,ra, true);
+						if( dst->t->kind == HSTRUCT ) {
+							hl_type *ft = hl_obj_field_fetch(ra->t,o->p3)->t;
+							if( ft->kind == HPACKED ) {
+								preg *r = alloc_reg(ctx,RCPU);
+								op64(ctx,LEA,r,pmem(&p,(CpuReg)rr->id,rt->fields_indexes[o->p3]));
+								store(ctx,dst,r,true);
+								break;
+							}
+						}
 						copy_to(ctx,dst,pmem(&p, (CpuReg)rr->id, rt->fields_indexes[o->p3]));
 					}
 					break;
@@ -3487,6 +3498,15 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 				vreg *r = R(0);
 				hl_runtime_obj *rt = hl_get_obj_rt(r->t);
 				preg *rr = alloc_cpu(ctx,r, true);
+				if( dst->t->kind == HSTRUCT ) {
+					hl_type *ft = hl_obj_field_fetch(r->t,o->p2)->t;
+					if( ft->kind == HPACKED ) {
+						preg *r = alloc_reg(ctx,RCPU);
+						op64(ctx,LEA,r,pmem(&p,(CpuReg)rr->id,rt->fields_indexes[o->p2]));
+						store(ctx,dst,r,true);
+						break;
+					}
+				}
 				copy_to(ctx,dst,pmem(&p, (CpuReg)rr->id, rt->fields_indexes[o->p2]));
 			}
 			break;
@@ -3687,6 +3707,10 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 				case HF64:
 					value = alloc_fpu(ctx, rb, true);
 					op32(ctx,MOVSD,pmem2(&p,base->id,offset->id,1,0),value);
+					break;
+				case HI64:
+					value = alloc_cpu(ctx, rb, true);
+					op64(ctx,MOV,pmem2(&p,base->id,offset->id,1,0),value);
 					break;
 				default:
 					ASSERT(rb->t->kind);

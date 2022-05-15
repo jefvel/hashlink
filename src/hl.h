@@ -117,6 +117,10 @@
 #	pragma warning(disable:4820) // windows include
 #	pragma warning(disable:4668) // windows include
 #	pragma warning(disable:4738) // return float bad performances
+#	pragma warning(disable:4061) // explicit values in switch
+#	if (_MSC_VER >= 1920)
+#		pragma warning(disable:5045) // spectre
+#	endif
 #endif
 
 #if defined(HL_VCC) || defined(HL_MINGW) || defined(HL_CYGWIN)
@@ -329,8 +333,9 @@ typedef enum {
 	HNULL	= 19,
 	HMETHOD = 20,
 	HSTRUCT	= 21,
+	HPACKED = 22,
 	// ---------
-	HLAST	= 22,
+	HLAST	= 23,
 	_H_FORCE_INT = 0x7FFFFFFF
 } hl_type_kind;
 
@@ -659,15 +664,15 @@ HL_API vdynamic *hl_dyn_call_safe( vclosure *c, vdynamic **args, int nargs, bool
 	so you are sure it's of the used typed. Otherwise use hl_dyn_call
 */
 #define hl_call0(ret,cl) \
-	(cl->hasValue ? ((ret(*)(vdynamic*))cl->fun)(cl->value) : ((ret(*)())cl->fun)())
+	(cl->hasValue ? ((ret(*)(vdynamic*))cl->fun)((vdynamic*)cl->value) : ((ret(*)())cl->fun)())
 #define hl_call1(ret,cl,t,v) \
-	(cl->hasValue ? ((ret(*)(vdynamic*,t))cl->fun)(cl->value,v) : ((ret(*)(t))cl->fun)(v))
+	(cl->hasValue ? ((ret(*)(vdynamic*,t))cl->fun)((vdynamic*)cl->value,v) : ((ret(*)(t))cl->fun)(v))
 #define hl_call2(ret,cl,t1,v1,t2,v2) \
-	(cl->hasValue ? ((ret(*)(vdynamic*,t1,t2))cl->fun)(cl->value,v1,v2) : ((ret(*)(t1,t2))cl->fun)(v1,v2))
+	(cl->hasValue ? ((ret(*)(vdynamic*,t1,t2))cl->fun)((vdynamic*)cl->value,v1,v2) : ((ret(*)(t1,t2))cl->fun)(v1,v2))
 #define hl_call3(ret,cl,t1,v1,t2,v2,t3,v3) \
-	(cl->hasValue ? ((ret(*)(vdynamic*,t1,t2,t3))cl->fun)(cl->value,v1,v2,v3) : ((ret(*)(t1,t2,t3))cl->fun)(v1,v2,v3))
+	(cl->hasValue ? ((ret(*)(vdynamic*,t1,t2,t3))cl->fun)((vdynamic*)cl->value,v1,v2,v3) : ((ret(*)(t1,t2,t3))cl->fun)(v1,v2,v3))
 #define hl_call4(ret,cl,t1,v1,t2,v2,t3,v3,t4,v4) \
-	(cl->hasValue ? ((ret(*)(vdynamic*,t1,t2,t3,t4))cl->fun)(cl->value,v1,v2,v3,v4) : ((ret(*)(t1,t2,t3,t4))cl->fun)(v1,v2,v3,v4))
+	(cl->hasValue ? ((ret(*)(vdynamic*,t1,t2,t3,t4))cl->fun)((vdynamic*)cl->value,v1,v2,v3,v4) : ((ret(*)(t1,t2,t3,t4))cl->fun)(v1,v2,v3,v4))
 
 // ----------------------- THREADS --------------------------------------------------
 
