@@ -154,7 +154,11 @@
 #	define EXPORT __declspec( dllexport )
 #	define IMPORT __declspec( dllimport )
 #else
+#if defined(HL_GCC) || defined(HL_CLANG)
+#	define EXPORT __attribute__((visibility("default")))
+#else
 #	define EXPORT
+#endif
 #	define IMPORT extern
 #endif
 
@@ -233,8 +237,10 @@ typedef uint16_t uchar;
 #if defined(HL_IOS) || defined(HL_TVOS) || defined(HL_MAC)
 #include <stddef.h>
 #include <stdint.h>
+#if !defined(__cplusplus) || __cplusplus < 201103L
 typedef uint16_t char16_t;
 typedef uint32_t char32_t;
+#endif
 #else
 #	include <uchar.h>
 #endif
@@ -724,6 +730,7 @@ HL_API void hl_add_root( void *ptr );
 HL_API void hl_remove_root( void *ptr );
 HL_API void hl_gc_major( void );
 HL_API bool hl_is_gc_ptr( void *ptr );
+HL_API int hl_gc_get_memsize( void *ptr );
 
 HL_API void hl_blocking( bool b );
 HL_API bool hl_is_blocking( void );

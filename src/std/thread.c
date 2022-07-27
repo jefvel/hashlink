@@ -22,6 +22,9 @@
 
 #include <hl.h>
 
+typedef struct _hl_semaphore hl_semaphore;
+typedef struct _hl_condition hl_condition;
+
 #if !defined(HL_THREADS)
 
 struct _hl_mutex {
@@ -191,7 +194,7 @@ DEFINE_PRIM(_VOID, mutex_free, _MUTEX);
 HL_PRIM hl_semaphore *hl_semaphore_alloc(int value) {
 #	if !defined(HL_THREADS)
 	static struct _hl_semaphore null_semaphore = {0};
-	return (hl_condition *)&null_semaphore;
+	return (hl_semaphore *)&null_semaphore;
 #	elif defined(HL_WIN)
 	hl_semaphore *sem =
 	    (hl_semaphore *)hl_gc_alloc_finalizer(sizeof(hl_semaphore));
@@ -226,6 +229,7 @@ HL_PRIM void hl_semaphore_acquire(hl_semaphore *sem) {
 
 HL_PRIM bool hl_semaphore_try_acquire(hl_semaphore *sem, vdynamic *timeout) {
 #	if !defined(HL_THREADS)
+	return true;
 #	elif defined(HL_WIN)
 	return WaitForSingleObject(sem->sem,
 	                           timeout ? (DWORD)((FLOAT)timeout->v.d * 1000.0)
@@ -335,6 +339,7 @@ HL_PRIM void hl_condition_acquire(hl_condition *cond) {
 
 HL_PRIM bool hl_condition_try_acquire(hl_condition *cond) {
 #	if !defined(HL_THREADS)
+	return true;
 #	elif defined(HL_WIN)
 	return (bool)TryEnterCriticalSection(&cond->cs);
 #	else
@@ -361,9 +366,11 @@ HL_PRIM void hl_condition_wait(hl_condition *cond) {
 
 HL_PRIM bool hl_condition_timed_wait(hl_condition *cond, double timeout) {
 #	if !defined(HL_THREADS)
+	return true;
 #	elif defined(HL_WIN)
 	SleepConditionVariableCS(&cond->cond, &cond->cs,
 	                         (DWORD)((FLOAT)timeout * 1000.0));
+	return true;
 #	else
 	struct timeval tv;
 	struct timespec t;
@@ -625,6 +632,7 @@ typedef struct _hl_lock hl_lock;
 struct _hl_lock {
 	void (*free)( hl_lock * );
 #if !defined(HL_THREADS)
+	int counter;
 #elif defined(HL_WIN)
 	HANDLE wait;
 #else
@@ -648,6 +656,7 @@ HL_PRIM hl_lock *hl_lock_create() {
 	hl_lock *l = (hl_lock*)hl_gc_alloc_finalizer(sizeof(hl_lock));
 	l->free = hl_lock_free;
 #	if !defined(HL_THREADS)
+	l->counter = 0;
 #	elif defined(HL_WIN)
 	l->wait = CreateSemaphore(NULL,0,(1 << 30),NULL);
 #	else
@@ -660,6 +669,7 @@ HL_PRIM hl_lock *hl_lock_create() {
 
 HL_PRIM void hl_lock_release( hl_lock *l ) {
 #	if !defined(HL_THREADS)
+	l->counter++;
 #	elif defined(HL_WIN)
 	ReleaseSemaphore(l->wait,1,NULL);
 #	else
@@ -672,6 +682,8 @@ HL_PRIM void hl_lock_release( hl_lock *l ) {
 
 HL_PRIM bool hl_lock_wait( hl_lock *l, vdynamic *timeout ) {
 #	if !defined(HL_THREADS)
+	if( l->counter == 0 ) return false;
+	l->counter--;
 	return true;
 #	elif defined(HL_WIN)
 	DWORD ret;
