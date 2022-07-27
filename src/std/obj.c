@@ -151,7 +151,7 @@ HL_PRIM void hl_cache_free() {
 
 HL_PRIM hl_obj_field *hl_obj_field_fetch( hl_type *t, int fid ) {
 	hl_runtime_obj *rt;
-	if( t->kind != HOBJ )
+	if( t->kind != HOBJ && t->kind != HSTRUCT )
 		return NULL;
 	rt = hl_get_obj_rt(t);
 	if( fid < 0 || fid >= rt->nfields )
@@ -233,12 +233,25 @@ HL_PRIM hl_runtime_obj *hl_get_obj_rt( hl_type *ot ) {
 	nlookup = 0;
 	for(i=0;i<o->nfields;i++) {
 		hl_type *ft = o->fields[i].t;
-		size += hl_pad_struct(size,ft);
+		hl_type *pad = ft;
+		while( pad->kind == HPACKED ) {
+			// align on first field
+			pad = pad->tparam;
+			while( pad->obj->super && hl_get_obj_rt(pad->obj->super)->nfields ) pad = pad->obj->super;
+			pad = pad->obj->fields[0].t;
+		}
+		size += hl_pad_struct(size,pad);
 		t->fields_indexes[i+start] = size;
 		if( *o->fields[i].name )
 			hl_lookup_insert(t->lookup,nlookup++,o->fields[i].hashed_name,o->fields[i].t,size);
 		else
 			t->nlookup--;
+		if( ft->kind == HPACKED ) {
+			hl_runtime_obj *rts = hl_get_obj_rt(ft->tparam);
+			size += rts->size;
+			if( rts->hasPtr ) t->hasPtr = true;
+			continue;
+		}
 		size += hl_type_size(ft);
 		if( !t->hasPtr && hl_is_ptr(ft) ) t->hasPtr = true;
 	}
@@ -277,6 +290,12 @@ HL_PRIM hl_runtime_obj *hl_get_obj_rt( hl_type *ot ) {
 			hl_type *ft = o->fields[i].t;
 			if( hl_is_ptr(ft) ) {
 				int pos = t->fields_indexes[i + start] / HL_WSIZE;
+				if( ft->kind == HPACKED ) {
+					hl_runtime_obj *rts = hl_get_obj_rt(ft->tparam);
+					if( rts->t->mark_bits )
+						memcpy(mark + (pos>>5), rts->t->mark_bits, hl_mark_size(rts->size));
+					continue;
+				}
 				mark[pos >> 5] |= 1 << (pos & 31);
 			}
 		}
@@ -408,12 +427,24 @@ HL_API void hl_flush_proto( hl_type *ot ) {
 	hl_module_context *m = o->m;
 	if( !rt || !ot->vobj_proto ) return;
 	for(i=0;i<o->nbindings;i++) {
-		hl_runtime_binding *b = rt->bindings + i;
+		int fid = o->bindings[i<<1];
 		int mid = o->bindings[(i<<1)|1];
-		if( b->closure )
-			b->ptr = m->functions_ptrs[mid];
-		else
-			((vclosure*)b->ptr)->fun = m->functions_ptrs[mid];
+		hl_runtime_binding *b = NULL;
+		int j;
+		for(j=0;j<rt->nbindings;j++)
+			if( rt->bindings[j].fid == fid ) {
+				b = rt->bindings + j;
+				break;
+			}
+		void *ptr = m->functions_ptrs[mid];
+		if( b->closure ) {
+			if( b->ptr != ptr )
+				b->ptr = ptr;
+		} else {
+			vclosure *c = (vclosure*)b->ptr;
+			if( c->fun != ptr )
+				c->fun = ptr;
+		}
 	}
 }
 
