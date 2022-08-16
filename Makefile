@@ -17,7 +17,7 @@ HLFLAGS = -ldl
 LIBEXT = so
 LIBTURBOJPEG = -lturbojpeg
 
-PCRE_INCLUDE = -I include/pcre
+PCRE_FLAGS = -I include/pcre
 
 PCRE = include/pcre/pcre_chartables.o include/pcre/pcre_compile.o include/pcre/pcre_dfa_exec.o \
 	include/pcre/pcre_exec.o include/pcre/pcre_fullinfo.o include/pcre/pcre_globals.o \
@@ -107,6 +107,7 @@ LIBFLAGS += -L/opt/libjpeg-turbo/lib64
 endif
 
 LIBOPENAL = -lopenal
+LIBOPENGL = -lGL
 RELEASE_NAME = linux
 
 endif
