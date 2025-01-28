@@ -112,11 +112,13 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 #if defined(HL_LINUX) || defined(HL_MAC)
 #include <signal.h>
 static void handle_signal( int signum ) {
+	hl_error("SIGNAL %d", signum);
 	signal(signum, SIG_DFL);
-	printf("SIGNAL %d\n",signum);
-	hl_dump_stack();
-	fflush(stdout);
-	raise(signum);
+	if (signum == SIGSEGV) {
+		hl_dump_stack();
+		fflush(stdout);
+		raise(signum);
+	}
 }
 static void setup_handler() {
 	struct sigaction act;
@@ -125,6 +127,7 @@ static void setup_handler() {
 	act.sa_flags = 0;
 	sigemptyset(&act.sa_mask);
 	signal(SIGPIPE, SIG_IGN);
+	sigaction(SIGINT,&act,NULL);
 	sigaction(SIGSEGV,&act,NULL);
 	sigaction(SIGTERM,&act,NULL);
 }
@@ -135,6 +138,7 @@ static void setup_handler() {
 
 #ifdef HL_WIN
 int wmain(int argc, pchar *argv[]) {
+//int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
 #else
 int main(int argc, pchar *argv[]) {
 #endif
@@ -149,6 +153,8 @@ int main(int argc, pchar *argv[]) {
 	main_context ctx;
 	bool isExc = false;
 	int first_boot_arg = -1;
+	//int argc = __argc;
+	//pchar** argv = __argv;
 	argv++;
 	argc--;
 
