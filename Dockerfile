@@ -1,0 +1,37 @@
+#FROM ubuntu AS builder
+FROM frolvlad/alpine-gxx AS builder
+
+#RUN apt update 
+#RUN apt -y install build-essential libpng-dev libturbojpeg-dev libvorbis-dev libopenal-dev libsdl2-dev libglu1-mesa-dev libmbedtls-dev libuv1-dev libsqlite3-dev
+RUN apk update && \
+apk add make libpng-dev libjpeg-turbo-dev libvorbis-dev openal-soft-dev sdl2-dev glu-dev mbedtls-dev libuv-dev sqlite-dev
+
+COPY src /app/src/
+COPY libs /app/libs/
+COPY include /app/include/
+COPY other /app/other/
+COPY Makefile /app/
+COPY CMakeLists.txt /app/
+
+WORKDIR /app
+
+RUN make clean && \
+	make -j2
+
+#FROM ubuntu:24.10
+FROM alpine
+
+#RUN apt update && apt install -y make \
+ #libpng16-16 libturbojpeg libvorbisfile3 libuv1 libmbedtls14t64 libsqlite3-0
+
+RUN apk update && \
+apk add libpng jpeg libvorbis libuv mbedtls2 sqlite-libs bash
+
+COPY src/hl.h /usr/local/include/
+COPY src/hlc.h /usr/local/include/
+COPY src/hlc_main.c /usr/local/include/
+COPY --from=builder /app/*.hdll /usr/local/bin/
+COPY --from=builder /app/*.so /usr/local/lib/
+COPY --from=builder /app/hl /usr/local/bin
+	
+ENTRYPOINT [ "/bin/bash", "-l", "-c" ]
