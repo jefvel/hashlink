@@ -41,6 +41,10 @@
 #include <stdlib.h>
 #endif
 
+#if defined(__MUSL__)
+#define tgkill(tgid, tid, sig) syscall(SYS_tgkill, tgid, tid, sig)
+#endif
+
 #if defined(__GLIBC__)
 #if __GLIBC_PREREQ(2, 30)
 // tgkill is present

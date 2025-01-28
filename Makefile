@@ -186,6 +186,11 @@ else
 CFLAGS += -m$(MARCH) -fPIC -pthread -fno-omit-frame-pointer
 LFLAGS += -lm -Wl,-rpath,.:'$$ORIGIN':$(INSTALL_LIB_DIR) -Wl,--export-dynamic -Wl,--no-undefined
 
+MUSL = ldd /bin/ls | grep 'musl' | head -1 | cut -d ' ' -f1
+ifneq (${MUSL},)
+	CFLAGS += -D__MUSL__
+endif
+
 ifeq ($(MARCH),32)
 CFLAGS += -I /usr/include/i386-linux-gnu -msse2 -mfpmath=sse
 LIBFLAGS += -L/opt/libjpeg-turbo/lib
