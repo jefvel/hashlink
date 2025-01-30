@@ -1,4 +1,4 @@
-FROM ubuntu:latest AS builder
+FROM ubuntu:24.10 AS builder
 
 RUN apt update 
 RUN apt -y install build-essential libpng-dev libturbojpeg-dev libvorbis-dev libopenal-dev libsdl2-dev libglu1-mesa-dev libmbedtls-dev libuv1-dev libsqlite3-dev
@@ -14,7 +14,7 @@ WORKDIR /app
 
 RUN make clean && make -j2
 
-FROM ubuntu:latest
+FROM ubuntu:24.10
 
 RUN apt update && apt install -y \
  libpng16-16 libturbojpeg libvorbisfile3 libuv1 libmbedtls14t64 libsqlite3-0
