@@ -1,0 +1,29 @@
+FROM ubuntu:latest AS builder
+
+RUN apt update 
+RUN apt -y install build-essential libpng-dev libturbojpeg-dev libvorbis-dev libopenal-dev libsdl2-dev libglu1-mesa-dev libmbedtls-dev libuv1-dev libsqlite3-dev
+
+COPY src /app/src/
+COPY libs /app/libs/
+COPY include /app/include/
+COPY other /app/other/
+COPY Makefile /app/
+COPY CMakeLists.txt /app/
+
+WORKDIR /app
+
+RUN make clean && make -j2
+
+FROM ubuntu:latest
+
+RUN apt update && apt install -y \
+ libpng16-16 libturbojpeg libvorbisfile3 libuv1 libmbedtls14t64 libsqlite3-0
+
+COPY src/hl.h /usr/local/include/
+COPY src/hlc.h /usr/local/include/
+COPY src/hlc_main.c /usr/local/include/
+COPY --from=builder /app/*.hdll /usr/local/bin/
+COPY --from=builder /app/*.so /usr/local/lib/
+COPY --from=builder /app/hl /usr/local/bin
+	
+ENTRYPOINT [ "/bin/bash", "-l", "-c" ]
