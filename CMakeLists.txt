@@ -1,45 +1,69 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.13)
 
 set(HL_VERSION_MAJOR 1)
-set(HL_VERSION_MINOR 14)
+set(HL_VERSION_MINOR 16)
 set(HL_VERSION_PATCH 0)
 set(HL_VERSION ${HL_VERSION_MAJOR}.${HL_VERSION_MINOR}.${HL_VERSION_PATCH})
 
 cmake_policy(SET CMP0042 NEW)
+if (${CMAKE_VERSION} VERSION_GREATER_EQUAL 3.24)
+	cmake_policy(VERSION 3.24)
+endif()
 
 if(WIN32)
     set(CMAKE_SYSTEM_VERSION 10.0)
-    project(hashlink C CXX) # C++ required for directx
-else()
-    project(hashlink C)
 endif()
+project(hashlink)
 
 include(GNUInstallDirs)
 include(FindPkgConfig)
 include(CTest)
 
 set(WITH_VM_DEFAULT ON)
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm|aarch64")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm|aarch64" AND (NOT CMAKE_OSX_ARCHITECTURES MATCHES "x86_64"))
     set(WITH_VM_DEFAULT OFF)
 endif()
 
 option(WITH_VM "Whether to build the Hashlink virtual machine" ${WITH_VM_DEFAULT})
+option(BUILD_SHARED_LIBS "Build using shared libraries" ON)
+if(BUILD_SHARED_LIBS)
+    # ensure third-party static libs are built with PIC
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+if(ANDROID)
+    set(_DOWNLOAD_DEPENDENCIES ON)
+else()
+    set(_DOWNLOAD_DEPENDENCIES OFF)
+endif()
+option(DOWNLOAD_DEPENDENCIES "Download & build third-party dependencies" ${_DOWNLOAD_DEPENDENCIES})
 
+if(MSVC)
+    if (CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+        set (CMAKE_INSTALL_PREFIX "C:/HaxeToolkit/hashlink" CACHE PATH "default install path" FORCE)
+    endif()
+endif()
+option(FLAT_INSTALL_TREE "Flat install tree" ${MSVC})
+if(FLAT_INSTALL_TREE)
+    set(CMAKE_INSTALL_BINDIR .)
+    set(CMAKE_INSTALL_LIBDIR .)
+endif()
 # force Unicode over Multi-byte
 if(MSVC)
     add_definitions(-DUNICODE -D_UNICODE)
+    add_compile_options(/permissive-)
+endif()
+
+if (MINGW)
+    add_compile_options(-municode)
+    add_link_options(-municode)
 endif()
 
 list(APPEND CMAKE_MODULE_PATH
     ${CMAKE_CURRENT_SOURCE_DIR}/other/cmake
 )
 
-if(CMAKE_VERSION VERSION_LESS "3.1")
-    set(CMAKE_C_FLAGS "-std=c11 ${CMAKE_C_FLAGS}")
-else()
-    set(CMAKE_C_STANDARD 11)
-    set(CMAKE_C_STANDARD_REQUIRED ON)
-endif()
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # put output in "bin"
 
@@ -55,12 +79,6 @@ foreach( OUTPUTCONFIG ${CMAKE_CONFIGURATION_TYPES} )
     set( CMAKE_LIBRARY_OUTPUT_DIRECTORY_${OUTPUTCONFIG} ${OUTPUT_DIR} )
     set( CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${OUTPUTCONFIG} ${OUTPUT_DIR} )
 endforeach()
-
-include_directories(
-    src
-    include
-    include/pcre
-)
 
 file(GLOB pcre_srcs
     include/pcre/pcre2_auto_possess.c
@@ -137,11 +155,19 @@ if(IOS_PLATFORM)
     )
 endif()
 
-add_library(libhl SHARED
+add_library(libhl
     ${pcre_srcs}
     src/gc.c
     ${std_srcs}
 )
+
+target_include_directories(libhl
+    PUBLIC src
+    PRIVATE include include/pcre
+)
+
+# C11 / C++11 are required for features such as unicode strings
+target_compile_features(libhl PUBLIC cxx_std_11 c_std_11)
 
 set(public_headers
     src/hl.h
@@ -153,7 +179,7 @@ set_target_properties(libhl
     PUBLIC_HEADER "${public_headers}"
 )
 
-if(WIN32)
+if(MSVC)
     set_target_properties(libhl
         PROPERTIES
         OUTPUT_NAME libhl
@@ -181,9 +207,14 @@ if (WITH_VM)
         src/debugger.c
         src/profile.c
     )
-
-    if (UNIX AND NOT APPLE)
-        set_target_properties(hl PROPERTIES INSTALL_RPATH "$ORIGIN;${CMAKE_INSTALL_PREFIX}/lib")
+    if(APPLE)
+        set_target_properties(hl PROPERTIES
+            INSTALL_RPATH "@executable_path;@executable_path/../${CMAKE_INSTALL_LIBDIR}"
+        )
+    elseif (UNIX)
+        set_target_properties(hl PROPERTIES
+            INSTALL_RPATH "$ORIGIN;$ORIGIN/../${CMAKE_INSTALL_LIBDIR}"
+        )
     endif()
 
     target_link_libraries(hl libhl)
@@ -196,7 +227,13 @@ endif()
 if(WIN32)
     target_link_libraries(libhl ws2_32 user32)
 else()
-    target_link_libraries(libhl m dl pthread)
+    target_link_libraries(libhl m dl)
+
+    if(ANDROID)
+        target_link_libraries(libhl log)
+    else()
+        target_link_libraries(libhl pthread)
+    endif()
 endif()
 
 if(BUILD_TESTING)
@@ -206,11 +243,24 @@ if(BUILD_TESTING)
         haxe
     )
 
+    if("${CMAKE_GENERATOR_PLATFORM}" STREQUAL "Win32")
+        SET(HAXE_FLAGS -D hl-legacy32)
+    else()
+        SET(HAXE_FLAGS )
+    endif()
+
+    if(MINGW)
+        set(HLC_LIBRARIES dbghelp)
+    else()
+        set(HLC_LIBRARIES)
+    endif()
+
     #####################
     # hello.hl
 
     add_custom_command(OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/hello.hl
         COMMAND ${HAXE_COMPILER}
+            ${HAXE_FLAGS}
             -hl ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/hello.hl
             -cp ${CMAKE_SOURCE_DIR}/other/tests -main HelloWorld
     )
@@ -223,6 +273,7 @@ if(BUILD_TESTING)
 
     add_custom_command(OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/threads.hl
         COMMAND ${HAXE_COMPILER}
+            ${HAXE_FLAGS}
             -hl ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/threads.hl
             -cp ${CMAKE_SOURCE_DIR}/other/tests -main Threads
     )
@@ -235,6 +286,7 @@ if(BUILD_TESTING)
 
     add_custom_command(OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/uvsample.hl
         COMMAND ${HAXE_COMPILER}
+            ${HAXE_FLAGS}
             -hl ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/uvsample.hl
             -cp ${CMAKE_SOURCE_DIR}/other/uvsample -main UVSample
     )
@@ -247,6 +299,7 @@ if(BUILD_TESTING)
 
     add_custom_command(OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/hello/hello.c
         COMMAND ${HAXE_COMPILER}
+            ${HAXE_FLAGS}
             -hl ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/hello/hello.c
             -cp ${CMAKE_SOURCE_DIR}/other/tests -main HelloWorld
     )
@@ -262,6 +315,7 @@ if(BUILD_TESTING)
     )
     target_link_libraries(hello
         libhl
+        ${HLC_LIBRARIES}
     )
 
     #####################
@@ -269,6 +323,7 @@ if(BUILD_TESTING)
 
     add_custom_command(OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/threads/threads.c
         COMMAND ${HAXE_COMPILER}
+            ${HAXE_FLAGS}
             -hl ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/threads/threads.c
             -cp ${CMAKE_SOURCE_DIR}/other/tests -main Threads
     )
@@ -284,6 +339,7 @@ if(BUILD_TESTING)
     )
     target_link_libraries(threads
         libhl
+        ${HLC_LIBRARIES}
     )
 
     #####################
@@ -291,6 +347,7 @@ if(BUILD_TESTING)
 
     add_custom_command(OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/uvsample/uvsample.c
         COMMAND ${HAXE_COMPILER}
+            ${HAXE_FLAGS}
             -hl ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/uvsample/uvsample.c
             -cp ${CMAKE_SOURCE_DIR}/other/uvsample -main UVSample
     )
@@ -307,6 +364,22 @@ if(BUILD_TESTING)
     target_link_libraries(uvsample
         libhl
         uv.hdll
+        ${HLC_LIBRARIES}
+    )
+
+    #####################
+    # header_macro_clashes.c
+
+    add_executable(header_macro_clashes
+        ${CMAKE_SOURCE_DIR}/other/tests/header_macro_clashes/header_macro_clashes.c
+    )
+    set_target_properties(header_macro_clashes
+        PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test/
+    )
+    target_link_libraries(header_macro_clashes
+        libhl
+        ${HLC_LIBRARIES}
     )
 
     #####################
@@ -360,15 +433,6 @@ endif()
 
 set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
-
-if(MSVC)
-    if (CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-        set (CMAKE_INSTALL_PREFIX "C:/HaxeToolkit/hashlink" CACHE PATH "default install path" FORCE)
-    endif()
-
-    set(CMAKE_INSTALL_BINDIR .)
-    set(CMAKE_INSTALL_LIBDIR .)
-endif()
 
 set(HDLL_DESTINATION
     ${CMAKE_INSTALL_LIBDIR}

@@ -34,6 +34,7 @@
 #include <sys/stat.h>
 
 #if defined(HL_WIN)
+#	undef _GUID
 #	include <windows.h>
 #	include <direct.h>
 #	include <conio.h>
@@ -61,20 +62,9 @@ typedef struct _stat32 pstat;
 #	include <sys/times.h>
 #	include <sys/wait.h>
 #	include <locale.h>
-#	define HL_UTF8PATH
 typedef struct stat pstat;
 #endif
 
-#endif
-
-#ifdef HL_UTF8PATH
-typedef char pchar;
-#define pstrchr strchr
-#define pstrlen	strlen
-#else
-typedef uchar pchar;
-#define pstrchr wcschr
-#define pstrlen	ustrlen
 #endif
 
 #ifdef HL_MAC
@@ -86,6 +76,8 @@ typedef uchar pchar;
 #ifndef CLK_TCK
 #	define CLK_TCK	100
 #endif
+
+HL_PRIM hl_setup_t hl_setup = { 0 };
 
 static pchar *pstrdup( const pchar *s, int len ) {
 	pchar *ret;
@@ -122,6 +114,8 @@ HL_PRIM vbyte *hl_sys_string() {
 	return (vbyte*)USTR("GNU/kFreeBSD");
 #elif defined(HL_LINUX)
 	return (vbyte*)USTR("Linux");
+#elif defined(HL_EMSCRIPTEN)
+	return (vbyte*)USTR("Emscripten");
 #else
 #error Unknown system string
 #endif
@@ -165,39 +159,38 @@ HL_PRIM void hl_sys_print( vbyte *msg ) {
 	hl_blocking(false);
 }
 
-
-static void *f_before_exit = NULL;
-static void *f_profile_event = NULL;
-HL_PRIM void hl_setup_profiler( void *profile_event, void *before_exit ) {
-	f_before_exit = before_exit;
-	f_profile_event = profile_event;
-}
-
 HL_PRIM void hl_sys_profile_event( int code, vbyte *data, int dataLen ) {
-	if( f_profile_event ) ((void(*)(int,vbyte*,int))f_profile_event)(code,data,dataLen);
+	if( hl_setup.profile_event ) hl_setup.profile_event(code, data, dataLen);
 }
 
 HL_PRIM void hl_sys_exit( int code ) {
-	if( f_before_exit ) ((void(*)())f_before_exit)();
+	if( hl_setup.before_exit ) hl_setup.before_exit();
 	exit(code);
 }
 
-static void *f_vtune_init = NULL;
-static void *g_vtune_module = NULL;
-HL_PRIM void hl_setup_vtune( void *vtune_init, void *m ) {
-	f_vtune_init = vtune_init;
-	g_vtune_module = m;
+HL_PRIM void hl_sys_vtune_init() {
+	if( hl_setup.vtune_init ) hl_setup.vtune_init();
 }
 
-HL_PRIM void hl_sys_vtune_init() {
-	if( f_vtune_init ) {
-		getchar();
-		((void(*)(void*))f_vtune_init)(g_vtune_module);
-	}
+HL_PRIM bool hl_sys_load_plugin( vbyte *file ) {
+#	ifdef HL_UTF8_PATH
+	file = (vbyte*)hl_to_utf8((uchar*)file);
+#	endif
+	return hl_setup.load_plugin && hl_setup.load_plugin((pchar*)file);
+}
+
+HL_PRIM vdynamic *hl_sys_resolve_type( hl_type *t, hl_type *gt ) {
+	if( hl_setup.resolve_type == NULL )
+		return NULL;
+	return hl_setup.resolve_type(t,gt);
 }
 
 #ifdef HL_DEBUG_REPRO
 static double CURT = 0;
+#endif
+
+#ifdef HL_WIN
+static LARGE_INTEGER qpcFrequency;
 #endif
 
 HL_PRIM double hl_sys_time() {
@@ -208,13 +201,9 @@ HL_PRIM double hl_sys_time() {
 #ifdef HL_WIN
 	#define EPOCH_DIFF	(134774*24*60*60.0)
 	static double time_diff = 0.;
-	static double freq = 0.;
 	LARGE_INTEGER time;
 
-	if( freq == 0 ) {
-		QueryPerformanceFrequency(&time);
-		freq = (double)time.QuadPart;
-	}
+	double freq = (double)qpcFrequency.QuadPart;
 	QueryPerformanceCounter(&time);
 	if( time_diff == 0 ) {
 		FILETIME ft;
@@ -230,6 +219,22 @@ HL_PRIM double hl_sys_time() {
 	if( gettimeofday(&tv,NULL) != 0 )
 		return 0.;
 	return tv.tv_sec + ((double)tv.tv_usec) / 1000000.0;
+#endif
+}
+
+HL_PRIM int64 hl_sys_timestamp_ms() {
+#ifdef HL_WIN
+	LARGE_INTEGER time;
+	QueryPerformanceCounter(&time);
+
+	return time.QuadPart * 1000LL / qpcFrequency.QuadPart;
+#else
+	struct timespec ts;
+	if (clock_gettime(CLOCK_MONOTONIC, &ts)) {
+		return 0;
+	}
+
+	return ts.tv_sec * 1000 + (ts.tv_nsec / 1000000);
 #endif
 }
 
@@ -608,17 +613,16 @@ HL_PRIM vbyte *hl_sys_exe_path() {
 #elif defined(HL_CONSOLE)
 	return sys_exe_path();
 #else
-	const pchar *p = getenv("_");
-	if( p != NULL )
-		return (vbyte*)pstrdup(p,-1);
-	{
-		pchar path[PATH_MAX];
-		int length = readlink("/proc/self/exe", path, sizeof(path));
-		if( length < 0 )
-			return NULL;
-		path[length] = '\0';
-		return (vbyte*)pstrdup(path,-1);
+	pchar path[PATH_MAX];
+	int length = readlink("/proc/self/exe", path, sizeof(path));
+	if( length < 0 ) {
+		const pchar *p = getenv("_");
+		if( p != NULL )
+			return (vbyte*)pstrdup(p,-1);
+		return NULL;
 	}
+	path[length] = '\0';
+	return (vbyte*)pstrdup(path,-1);
 #endif
 }
 
@@ -656,50 +660,33 @@ HL_PRIM int hl_sys_get_char( bool b ) {
 #	endif
 }
 
-static pchar **sys_args;
-static int sys_nargs;
-
 HL_PRIM varray *hl_sys_args() {
-	varray *a = hl_alloc_array(&hlt_bytes,sys_nargs);
+	varray *a = hl_alloc_array(&hlt_bytes,hl_setup.sys_nargs);
 	int i;
-	for(i=0;i<sys_nargs;i++)
-		hl_aptr(a,pchar*)[i] = sys_args[i];
+	for(i=0;i<hl_setup.sys_nargs;i++)
+		hl_aptr(a,pchar*)[i] = hl_setup.sys_args[i];
 	return a;
 }
 
-static void *hl_file = NULL;
-
-HL_PRIM void hl_sys_init(void **args, int nargs, void *hlfile) {
-	sys_args = (pchar**)args;
-	sys_nargs = nargs;
-	hl_file = hlfile;
+HL_PRIM void hl_sys_init() {
+#ifdef HL_WIN
+	QueryPerformanceFrequency(&qpcFrequency);
+#endif
 #	ifdef HL_WIN_DESKTOP
 	setlocale(LC_CTYPE, ""); // printf to current locale
 #	endif
 }
 
 HL_PRIM vbyte *hl_sys_hl_file() {
-	return (vbyte*)hl_file;
-}
-
-static void *reload_fun = NULL;
-static void *reload_param = NULL;
-HL_PRIM void hl_setup_reload_check( void *freload, void *param ) {
-	reload_fun = freload;
-	reload_param = param;
+	return (vbyte*)hl_setup.file_path;
 }
 
 HL_PRIM bool hl_sys_check_reload( vbyte *debug_alt_file ) {
-	if( debug_alt_file && reload_param ) {
-		*((vbyte**)reload_param) = debug_alt_file;
-	}
-	return reload_fun && ((bool(*)(void*))reload_fun)(reload_param);
+	return hl_setup.reload_check != NULL && hl_setup.reload_check(debug_alt_file);
 }
 
-extern int hl_closure_stack_capture;
-
 HL_PRIM bool hl_sys_has_debugger() {
-	return hl_closure_stack_capture != 0;
+	return hl_setup.is_debugger_attached;
 }
 
 #ifndef HL_MOBILE
@@ -717,6 +704,7 @@ DEFINE_PRIM(_BYTES, sys_locale, _NO_ARG);
 DEFINE_PRIM(_VOID, sys_print, _BYTES);
 DEFINE_PRIM(_VOID, sys_exit, _I32);
 DEFINE_PRIM(_F64, sys_time, _NO_ARG);
+DEFINE_PRIM(_I64, sys_timestamp_ms, _NO_ARG);
 DEFINE_PRIM(_BYTES, sys_get_env, _BYTES);
 DEFINE_PRIM(_BOOL, sys_put_env, _BYTES _BYTES);
 DEFINE_PRIM(_ARR, sys_env, _NO_ARG);
@@ -747,3 +735,5 @@ DEFINE_PRIM(_VOID, sys_profile_event, _I32 _BYTES _I32);
 DEFINE_PRIM(_VOID, sys_vtune_init, _NO_ARG);
 DEFINE_PRIM(_I32, sys_set_flags, _I32);
 DEFINE_PRIM(_BOOL, sys_has_debugger, _NO_ARG);
+DEFINE_PRIM(_BOOL, sys_load_plugin, _BYTES);
+DEFINE_PRIM(_DYN, sys_resolve_type, _TYPE _TYPE);

@@ -25,8 +25,8 @@
 #pragma warning(disable:4548)
 
 #	include <string.h>
-#	define _WINSOCKAPI_
 #	include <hl.h>
+#	undef _GUID
 #	include <winsock2.h>
 #	define FDSIZE(n)	(sizeof(void*) + (n) * sizeof(SOCKET))
 #	define SHUT_WR		SD_SEND
@@ -41,7 +41,9 @@
 #	include <hl.h>
 #	include <posix/posix.h>
 #else
+#	ifndef _GNU_SOURCE
 #	define _GNU_SOURCE
+#	endif
 #	include <string.h>
 #	include <sys/types.h>
 #	include <sys/socket.h>
@@ -473,6 +475,9 @@ HL_PRIM bool hl_socket_select( varray *ra, varray *wa, varray *ea, char *tmp, in
 	hl_blocking(true);
 	if( select((int)(max+1),ra?rs:NULL,wa?ws:NULL,ea?es:NULL,tt) == SOCKET_ERROR ) {
 		hl_blocking(false);
+#		ifndef HL_WIN
+		if( errno == EINTR ) return true;
+#		endif
 		return false;
 	}
 	hl_blocking(false);

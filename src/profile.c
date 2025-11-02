@@ -21,6 +21,7 @@
  */
 #include <hl.h>
 #include <hlmodule.h>
+#include "hlsystem.h"
 
 #ifdef HL_LINUX
 #include <semaphore.h>
@@ -58,6 +59,7 @@
 #define MAX_STACK_COUNT 2048
 
 HL_API double hl_sys_time( void );
+HL_API void	hl_sys_sleep( double time );
 HL_API void hl_setup_profiler( void *, void * );
 int hl_module_capture_stack_range( void *stack_top, void **stack_ptr, void **out, int size );
 uchar *hl_module_resolve_symbol_full( void *addr, uchar *out, int *outSize, int **r_debug_addr );
@@ -245,12 +247,12 @@ static void read_thread_data( thread_handle *t ) {
 #else
 	int size = (int)((unsigned char*)t->inf->stack_top - (unsigned char*)stack);
 	if( size > MAX_STACK_SIZE-32 ) size = MAX_STACK_SIZE-32;
-#ifdef HL_WIN_DESKTOP
+#if defined(HL_WIN_DESKTOP) && defined(HL_VCC)
 	// it seems we rarely can't make a first read on the thread stack, let's ignore errors and wait.
 	__try {
 #endif
 		memcpy(data.tmpMemory + 2,stack,size);
-#ifdef HL_WIN_DESKTOP
+#if defined(HL_WIN_DESKTOP) && defined(HL_VCC)
 	} __except(EXCEPTION_EXECUTE_HANDLER) {
 	}
 #endif
@@ -282,6 +284,7 @@ static void hl_profile_loop( void *_ ) {
 		if( t < next || data.profiling_pause ) {
 			if( !(t < next) ) next = t;
 			data.waitLoop = false;
+			if( data.profiling_pause ) hl_sys_sleep(0.001);
 			continue;
 		}
 		hl_threads_info *threads = hl_gc_threads_info();
@@ -357,7 +360,8 @@ static void profile_event( int code, vbyte *data, int dataLen );
 
 void hl_profile_setup( int sample_count ) {
 #	if defined(HL_THREADS) && (defined(HL_WIN_DESKTOP) || defined(HL_LINUX) || defined (HL_MAC))
-	hl_setup_profiler(profile_event,hl_profile_end);
+	hl_setup.profile_event = profile_event;
+	hl_setup.before_exit = hl_profile_end;
 	if( data.sample_count ) return;
 	if( sample_count < 0 ) {
 		// was not started with --profile : pause until we get start event
@@ -371,7 +375,7 @@ void hl_profile_setup( int sample_count ) {
 	sem_init(&shared_context.msg4, 0, 0);
 	struct sigaction action = {0};
 	action.sa_sigaction = sigprof_handler;
-	action.sa_flags = SA_SIGINFO;
+	action.sa_flags = SA_SIGINFO | SA_RESTART;
 	sigaction(SIGPROF, &action, NULL);
 #	elif defined(HL_MAC)
 	shared_context.context.uc_mcontext = NULL;
@@ -380,7 +384,7 @@ void hl_profile_setup( int sample_count ) {
 	shared_context.msg4 = dispatch_semaphore_create(0);
 	struct sigaction action = {0};
 	action.sa_sigaction = sigprof_handler;
-	action.sa_flags = SA_SIGINFO;
+	action.sa_flags = SA_SIGINFO | SA_RESTART;
 	sigaction(SIGPROF, &action, NULL);
 #	endif
 	hl_thread_start(hl_profile_loop,NULL,false);
@@ -429,6 +433,12 @@ static void profile_dump( vbyte* ptr ) {
 
 	char* filename = ptr == NULL ? "hlprofile.dump" : hl_to_utf8((uchar*)ptr);
 	FILE *f = fopen(filename,"wb");
+	if( f == NULL ) {
+		data.profiling_pause--;
+		printf("Failed to open file %s, 0 profile samples saved\n", filename);
+		hl_error("Failed to open file");
+		return;
+	}
 	int version = HL_VERSION;
 	fwrite("PROF",1,4,f);
 	fwrite(&version,1,4,f);
@@ -511,7 +521,7 @@ static void profile_dump( vbyte* ptr ) {
 	write_names(data.olds,f);
 	// done
 	fclose(f);
-	printf("%d profile samples saved\n", samples);
+	printf("%d profile samples saved to %s\n", samples, filename);
 	data.profiling_pause--;
 }
 

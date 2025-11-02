@@ -1,8 +1,12 @@
+add_library(ssl.hdll
+    ssl.c
+)
+
 if (WIN32)
     set(MBEDTLS_INCLUDE_DIRS ${INCLUDES_BASE_DIR}/mbedtls/include .)
-    set(MBEDTLS_LIBRARIES crypt32)
+    set(MBEDTLS_LIBRARIES crypt32 bcrypt)
 
-    add_library(ssl.hdll SHARED
+    target_sources(ssl.hdll PRIVATE
         ${INCLUDES_BASE_DIR}/mbedtls/library/aes.c
         ${INCLUDES_BASE_DIR}/mbedtls/library/aesce.c
         ${INCLUDES_BASE_DIR}/mbedtls/library/aesni.c
@@ -111,19 +115,27 @@ if (WIN32)
         ${INCLUDES_BASE_DIR}/mbedtls/library/x509write.c
         ${INCLUDES_BASE_DIR}/mbedtls/library/x509write_crt.c
         ${INCLUDES_BASE_DIR}/mbedtls/library/x509write_csr.c
-        ssl.c
     )
 
     target_compile_definitions(ssl.hdll
         PRIVATE
         MBEDTLS_USER_CONFIG_FILE="mbedtls_user_config.h"
     )
+elseif(DOWNLOAD_DEPENDENCIES)
+	FetchContent_Declare(mbedtls-project
+        URL https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.4/mbedtls-3.6.4.tar.bz2
+        URL_HASH SHA256=ec35b18a6c593cf98c3e30db8b98ff93e8940a8c4e690e66b41dfc011d678110
+        EXCLUDE_FROM_ALL
+    )
+    set(_OLD_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+    set(BUILD_SHARED_LIBS OFF)
+    set(ENABLE_PROGRAMS OFF CACHE INTERNAL "")
+    set(ENABLE_TESTING OFF CACHE INTERNAL "")
+    FetchContent_MakeAvailable(mbedtls-project)
+    set(BUILD_SHARED_LIBS ${_OLD_BUILD_SHARED_LIBS})
+    set(MBEDTLS_LIBRARIES MbedTLS::mbedtls MbedTLS::mbedx509 MbedTLS::mbedcrypto)
 else()
     find_package(MbedTLS REQUIRED)
-
-    add_library(ssl.hdll SHARED
-        ssl.c
-    )
 endif()
 
 set_as_hdll(ssl)

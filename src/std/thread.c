@@ -21,6 +21,7 @@
  */
 
 #include <hl.h>
+#include "hlsystem.h"
 
 typedef struct _hl_semaphore hl_semaphore;
 typedef struct _hl_condition hl_condition;
@@ -907,16 +908,10 @@ HL_PRIM hl_thread *hl_thread_start( void *callback, void *param, bool withGC ) {
 
 static void hl_run_thread( vclosure *c ) {
 	bool isExc;
-	varray *a;
-	int i;
 	vdynamic *exc = hl_dyn_call_safe(c,NULL,0,&isExc);
 	if( !isExc )
 		return;
-	a = hl_exception_stack();
-	uprintf(USTR("Uncaught exception: %s\n"), hl_to_string(exc));
-	for(i=0;i<a->size;i++)
-		uprintf(USTR("Called from %s\n"), hl_aptr(a,uchar*)[i]);
-	fflush(stdout);
+	hl_print_uncaught_exception(exc);
 }
 
 HL_PRIM hl_thread *hl_thread_create( vclosure *c ) {
@@ -924,6 +919,14 @@ HL_PRIM hl_thread *hl_thread_create( vclosure *c ) {
 }
 
 #if defined(HL_WIN) && defined(HL_THREADS)
+#ifdef HL_MINGW
+static void SetThreadName(DWORD dwThreadID, const char* threadName) {
+	SetThreadDescription(
+		OpenThread(THREAD_SET_LIMITED_INFORMATION, FALSE, dwThreadID),
+		hl_to_utf16(threadName)
+	);
+}
+#else
 const DWORD MS_VC_EXCEPTION = 0x406D1388;
 #pragma pack(push,8)
 typedef struct tagTHREADNAME_INFO
@@ -949,6 +952,7 @@ void SetThreadName(DWORD dwThreadID, const char* threadName) {
     }
 #pragma warning(pop)
 }
+#endif
 #endif
 
 HL_PRIM int hl_get_thread_id( hl_thread *t ) {

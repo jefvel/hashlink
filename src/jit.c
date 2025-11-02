@@ -24,6 +24,7 @@
 #endif
 #include <math.h>
 #include <hlmodule.h>
+#include "hlsystem.h"
 
 #ifdef __arm__
 #	error "JIT does not support ARM processors, only x86 and x86-64 are supported, please use HashLink/C native compilation instead"
@@ -307,6 +308,7 @@ struct jit_ctx {
 	int hl2c;
 	int longjump;
 	void *static_functions[8];
+	bool static_function_offset;
 };
 
 #define jit_exit() { hl_debug_break(); exit(-1); }
@@ -1845,6 +1847,7 @@ static preg *op_binop( jit_ctx *ctx, vreg *dst, vreg *a, vreg *b, hl_op bop ) {
 	case HABSTRACT:
 	case HARRAY:
 	case HI64:
+	case HGUID:
 		switch( ID2(pa->kind, pb->kind) ) {
 		case ID2(RCPU,RCPU):
 		case ID2(RCPU,RSTACK):
@@ -1879,7 +1882,7 @@ static preg *op_binop( jit_ctx *ctx, vreg *dst, vreg *a, vreg *b, hl_op bop ) {
 		switch( ID2(pa->kind, pb->kind) ) {
 		case ID2(RFPU,RFPU):
 			op64(ctx,o,pa,pb);
-			if( o == COMISD && bop != OJSGt ) {
+			if( (o == COMISD || o == COMISS) && bop != OJSGt ) {
 				int jnotnan;
 				XJump_small(JNParity,jnotnan);
 				switch( bop ) {
@@ -2312,11 +2315,12 @@ static void jit_nops( jit_ctx *ctx ) {
 static void *call_jit_c2hl = NULL;
 static void *call_jit_hl2c = NULL;
 
-static void *callback_c2hl( void **f, hl_type *t, void **args, vdynamic *ret ) {
+static void *callback_c2hl( void *_f, hl_type *t, void **args, vdynamic *ret ) {
 	/*
 		prepare stack and regs according to prepare_call_args, but by reading runtime type information
 		from the function type. The stack and regs will be setup by the trampoline function.
 	*/
+	void **f = (void**)_f;
 	unsigned char stack[MAX_ARGS * 8];
 	call_regs cregs = {0};
 	if( t->fun->nargs > MAX_ARGS )
@@ -2935,6 +2939,9 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 	ctx->totalRegsSize = size;
 	jit_buf(ctx);
 	ctx->functionPos = BUF_POS();
+	// make sure currentPos is > 0 before any reg allocations happen
+	// otherwise `alloc_reg` thinks that all registers are locked
+	ctx->currentPos = 1;
 	op_enter(ctx);
 #	ifdef HL_64
 	{
@@ -3152,10 +3159,15 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 			break;
 		case OToSFloat:
 			if( ra == dst ) break;
-			if( ra->t->kind == HI32 || ra->t->kind == HUI16 || ra->t->kind == HUI8 ) {
-				preg *r = alloc_cpu(ctx,ra,true);
-				preg *w = alloc_fpu(ctx,dst,false);
-				op32(ctx,dst->t->kind == HF64 ? CVTSI2SD : CVTSI2SS,w,r);
+			if (ra->t->kind == HI32 || ra->t->kind == HUI16 || ra->t->kind == HUI8) {
+				preg* r = alloc_cpu(ctx, ra, true);
+				preg* w = alloc_fpu(ctx, dst, false);
+				op32(ctx, dst->t->kind == HF64 ? CVTSI2SD : CVTSI2SS, w, r);
+				store(ctx, dst, w, true);
+			} else if (ra->t->kind == HI64 ) {
+				preg* r = alloc_cpu(ctx, ra, true);
+				preg* w = alloc_fpu(ctx, dst, false);
+				op64(ctx, dst->t->kind == HF64 ? CVTSI2SD : CVTSI2SS, w, r);
 				store(ctx, dst, w, true);
 			} else if( ra->t->kind == HF64 && dst->t->kind == HF32 ) {
 				preg *r = alloc_fpu(ctx,ra,true);
@@ -3262,7 +3274,7 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 				case HF64:
 				case HF32:
 #					ifdef HL_64
-					op64(ctx,dst->t->kind == HF32 ? MOVSS : MOVSD,alloc_fpu(ctx,dst,false),pcodeaddr(&p,o->p2 * 8 + (dst->t->kind == HF32 ? 4 : 0)));
+					op64(ctx,dst->t->kind == HF32 ? CVTSD2SS : MOVSD,alloc_fpu(ctx,dst,false),pcodeaddr(&p,o->p2 * 8));
 #					else
 					op64(ctx,dst->t->kind == HF32 ? MOVSS : MOVSD,alloc_fpu(ctx,dst,false),paddr(&p,m->code->floats + o->p2));
 #					endif
@@ -3512,6 +3524,23 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 					{
 						hl_runtime_obj *rt = hl_get_obj_rt(dst->t);
 						preg *rr = alloc_cpu(ctx, dst, true);
+						if( rb->t->kind == HSTRUCT ) {
+							hl_type *ft = hl_obj_field_fetch(dst->t,o->p2)->t;
+							if( ft->kind == HPACKED ) {
+								hl_runtime_obj *frt = hl_get_obj_rt(ft->tparam);
+								preg *prb = alloc_cpu(ctx, rb, true);
+								preg *tmp = alloc_reg(ctx, RCPU_CALL);
+								int offset = 0;
+								while( offset < frt->size ) {
+									int remain = frt->size - offset;
+									int copy_size = remain >= HL_WSIZE ? HL_WSIZE : (remain >= 4 ? 4 : (remain >= 2 ? 2 : 1));
+									copy(ctx, tmp, pmem(&p, (CpuReg)prb->id, offset), copy_size);
+									copy(ctx, pmem(&p, (CpuReg)rr->id, rt->fields_indexes[o->p2]+offset), tmp, copy_size);
+									offset += copy_size;
+								}
+								break;
+							}
+						}
 						copy_from(ctx, pmem(&p, (CpuReg)rr->id, rt->fields_indexes[o->p2]), rb);
 					}
 					break;
@@ -3601,6 +3630,23 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 				vreg *r = R(0);
 				hl_runtime_obj *rt = hl_get_obj_rt(r->t);
 				preg *rr = alloc_cpu(ctx, r, true);
+				if( ra->t->kind == HSTRUCT ) {
+					hl_type *ft = hl_obj_field_fetch(r->t,o->p1)->t;
+					if( ft->kind == HPACKED ) {
+						hl_runtime_obj *frt = hl_get_obj_rt(ft->tparam);
+						preg *pra = alloc_cpu(ctx, ra, true);
+						preg *tmp = alloc_reg(ctx, RCPU_CALL);
+						int offset = 0;
+						while( offset < frt->size ) {
+							int remain = frt->size - offset;
+							int copy_size = remain >= HL_WSIZE ? HL_WSIZE : (remain >= 4 ? 4 : (remain >= 2 ? 2 : 1));
+							copy(ctx, tmp, pmem(&p, (CpuReg)pra->id, offset), copy_size);
+							copy(ctx, pmem(&p, (CpuReg)rr->id, rt->fields_indexes[o->p1]+offset), tmp, copy_size);
+							offset += copy_size;
+						}
+						break;
+					}
+				}
 				copy_from(ctx, pmem(&p, (CpuReg)rr->id, rt->fields_indexes[o->p1]), ra);
 			}
 			break;
@@ -3861,7 +3907,7 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 						hl_runtime_obj *rt = hl_get_obj_rt(dst->t);
 						osize = rt->size;
 					}
-					preg *idx = alloc_cpu(ctx, rb, true);
+					preg *idx = alloc_cpu64(ctx, rb, true);
 					op64(ctx, IMUL, idx, pconst(&p,osize));
 					op64(ctx, isRead?MOV:LEA, rdst, pmem2(&p,alloc_cpu(ctx,ra, true)->id,idx->id,1,0));
 					store(ctx,dst,dst->current,false);
@@ -3874,14 +3920,35 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 			break;
 		case OSetArray:
 			{
-				preg *rrb = IS_FLOAT(rb) ? alloc_fpu(ctx,rb,true) : alloc_cpu(ctx,rb,true);
 				if( dst->t->kind == HABSTRACT ) {
-					bool isWrite = dst->t->kind != HOBJ && dst->t->kind != HSTRUCT;
-					// can only write pointers
-					if( !isWrite ) ASSERT(1);
-					copy(ctx, pmem2(&p,alloc_cpu(ctx,dst,true)->id,alloc_cpu64(ctx,ra,true)->id,sizeof(void*),0), rrb, rb->size);
-				} else
+					int osize;
+					bool isWrite = rb->t->kind != HOBJ && rb->t->kind != HSTRUCT;
+					if( isWrite ) {
+						osize = sizeof(void*);
+					} else {
+						hl_runtime_obj *rt = hl_get_obj_rt(rb->t);
+						osize = rt->size;
+					}
+					preg *pdst = alloc_cpu(ctx,dst,true);
+					preg *pra = alloc_cpu64(ctx,ra,true);
+					op64(ctx, IMUL, pra, pconst(&p,osize));
+					op64(ctx, ADD, pdst, pra);
+					scratch(pra);
+					preg *prb = alloc_cpu(ctx,rb,true);
+					preg *tmp = alloc_reg(ctx, RCPU_CALL);
+					int offset = 0;
+					while( offset < osize ) {
+						int remain = osize - offset;
+						int copy_size = remain >= HL_WSIZE ? HL_WSIZE : (remain >= 4 ? 4 : (remain >= 2 ? 2 : 1));
+						copy(ctx, tmp, pmem(&p, prb->id, offset), copy_size);
+						copy(ctx, pmem(&p, pdst->id, offset), tmp, copy_size);
+						offset += copy_size;
+					}
+					scratch(pdst);
+				} else  {
+					preg *rrb = IS_FLOAT(rb) ? alloc_fpu(ctx,rb,true) : alloc_cpu(ctx,rb,true);
 					copy(ctx, pmem2(&p,alloc_cpu(ctx,dst,true)->id,alloc_cpu64(ctx,ra,true)->id,hl_type_size(rb->t),sizeof(varray)), rrb, rb->size);
+				}
 			}
 			break;
 		case OArraySize:
@@ -4022,19 +4089,35 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 
 				hl_opcode *next = f->ops + opCount + 1;
 				bool null_field_access = false;
-				if( next->op == OField && next->p2 == o->p1 ) {
+				int hashed_name = 0;
+				// skip const and operation between nullcheck and access
+				while( (next < f->ops + f->nops - 1) && (next->op >= OInt && next->op <= ODecr) ) {
+					next++;
+				}
+				if( (next->op == OField && next->p2 == o->p1) || (next->op == OSetField && next->p1 == o->p1) ) {
+					int fid = next->op == OField ? next->p3 : next->p2;
 					hl_obj_field *f = NULL;
 					if( dst->t->kind == HOBJ || dst->t->kind == HSTRUCT )
-						f = hl_obj_field_fetch(dst->t, next->p3);
+						f = hl_obj_field_fetch(dst->t, fid);
 					else if( dst->t->kind == HVIRTUAL )
-						f = dst->t->virt->fields + next->p3;
+						f = dst->t->virt->fields + fid;
 					if( f == NULL ) ASSERT(dst->t->kind);
- 					null_field_access = true;
+					null_field_access = true;
+					hashed_name = f->hashed_name;
+				} else if( (next->op >= OCall1 && next->op <= OCallN) && next->p3 == o->p1 ) {
+					int fid = next->p2 < 0 ? -1 : ctx->m->functions_indexes[next->p2];
+					hl_function *cf = ctx->m->code->functions + fid;
+					const uchar *name = fun_field_name(cf);
+					null_field_access = true;
+					hashed_name = hl_hash_gen(name, true);
+				}
+
+				if( null_field_access ) {
 					pad_before_call(ctx, HL_WSIZE);
-					if( f->hashed_name >= 0 && f->hashed_name < 256 )
-						op64(ctx,PUSH8,pconst(&p,f->hashed_name),UNUSED);
+					if( hashed_name >= 0 && hashed_name < 256 )
+						op64(ctx,PUSH8,pconst(&p,hashed_name),UNUSED);
 					else
-						op32(ctx,PUSH,pconst(&p,f->hashed_name),UNUSED);
+						op32(ctx,PUSH,pconst(&p,hashed_name),UNUSED);
 				} else {
 					pad_before_call(ctx, 0);
 				}
@@ -4174,6 +4257,13 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 				op64(ctx,MOV,pmem(&p,treg->id,offset),trap);
 
 				/*
+					trap E,@catch
+					catch g
+					catch g2
+					...
+					@:catch
+
+					// Before haxe 5
 					This is a bit hackshish : we want to detect the type of exception filtered by the catch so we check the following
 					sequence of HL opcodes:
 
@@ -4185,13 +4275,15 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 
 					??? is expected to be hl.BaseType.check
 				*/
+				hl_opcode *cat = f->ops + opCount + 1;
 				hl_opcode *next = f->ops + opCount + 1 + o->p2;
 				hl_opcode *next2 = f->ops + opCount + 2 + o->p2;
-				if( next->op == OGetGlobal && next2->op == OCall2 && next2->p3 == next->p1 && dst->stack.id == (int)(int_val)next2->extra ) {
-					hl_type *gt = m->code->globals[next->p2];
+				if( cat->op == OCatch || (next->op == OGetGlobal && next2->op == OCall2 && next2->p3 == next->p1 && dst->stack.id == (int)(int_val)next2->extra) ) {
+					int gindex = cat->op == OCatch ? cat->p1 : next->p2;
+					hl_type *gt = m->code->globals[gindex];
 					while( gt->kind == HOBJ && gt->obj->super ) gt = gt->obj->super;
 					if( gt->kind == HOBJ && gt->obj->nfields && gt->obj->fields[0].t->kind == HTYPE ) {
-						void *addr = m->globals_data + m->globals_indexes[next->p2];
+						void *addr = m->globals_data + m->globals_indexes[gindex];
 #						ifdef HL_64
 						op64(ctx,MOV,treg,pconst64(&p,(int_val)addr));
 						op64(ctx,MOV,treg,pmem(&p,treg->id,0));
@@ -4207,7 +4299,11 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 
 				size = begin_native_call(ctx, 1);
 				set_native_arg(ctx,trap);
+#ifdef HL_MINGW
+				call_native(ctx,_setjmp,size);
+#else
 				call_native(ctx,setjmp,size);
+#endif
 				op64(ctx,TEST,PEAX,PEAX);
 				XJump_small(JZero,jenter);
 				op64(ctx,ADD,PESP,pconst(&p,trap_size));
@@ -4312,6 +4408,7 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 			break;
 		case OAssert:
 			{
+				pad_before_call(ctx, 0);
 				jlist *j = (jlist*)hl_malloc(&ctx->galloc,sizeof(jlist));
 				j->pos = BUF_POS();
 				j->target = -2;
@@ -4396,6 +4493,9 @@ int hl_jit_function( jit_ctx *ctx, hl_module *m, hl_function *f ) {
 					break;
 				}
 			}
+			break;
+		case OCatch:
+			// Only used by OTrap typing
 			break;
 		default:
 			jit_error(hl_op_name(o->op));
@@ -4495,12 +4595,17 @@ void *hl_jit_code( jit_ctx *ctx, hl_module *m, int *codesize, hl_debug_infos **d
 	if( !call_jit_c2hl ) {
 		call_jit_c2hl = code + ctx->c2hl;
 		call_jit_hl2c = code + ctx->hl2c;
-		hl_setup_callbacks2(callback_c2hl, get_wrapper, 1);
+		hl_setup.get_wrapper = get_wrapper;
+		hl_setup.static_call = callback_c2hl;
+		hl_setup.static_call_ref = true;
 #		ifdef JIT_CUSTOM_LONGJUMP
-		hl_setup_longjump(code + ctx->longjump);
+		hl_setup.throw_jump = (void(*)(jmp_buf, int))(code + ctx->longjump);
 #		endif
+	}
+	if( !ctx->static_function_offset ) {
 		int i;
-		for(i=0;i<sizeof(ctx->static_functions)/sizeof(void*);i++)
+		ctx->static_function_offset = true;
+		for(i=0;i<(int)(sizeof(ctx->static_functions)/sizeof(void*));i++)
 			ctx->static_functions[i] = (void*)(code + (int)(int_val)ctx->static_functions[i]);
 	}
 	// patch calls

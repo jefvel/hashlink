@@ -34,6 +34,11 @@ class GL {
 		return false;
 	}
 
+	@:hlNative("?sdl","gl_set_debug")
+	public static function setDebug( enable : Bool ) : Bool {
+		return false;
+	}
+
 	// non standard
 	public static function getConfigParameter( v : Int ) : Int {
 		return 0;
@@ -353,6 +358,10 @@ class GL {
 	}
 
 	public static function bufferSubData( target : Int, offset : Int, data : hl.Bytes, srcOffset : Int, srcLength : Int ) {
+	}
+
+	@:hlNative("?sdl","gl_get_buffer_sub_data")
+	public static function getBufferSubData( target : Int, offset : Int, data : hl.Bytes, srcOffset : Int, srcLength : Int ) {
 	}
 
 	public static function enableVertexAttribArray( attrib : Int ) {
@@ -981,6 +990,7 @@ class GL {
 	/* Queries */
 	public static inline var SAMPLES_PASSED                 = 0x8914;
 	public static inline var TIMESTAMP                      = 0x8E28;
+	public static inline var TIME_ELAPSED                   = 0x88BF;
 
 	/* Barriers */
 	public static inline var VERTEX_ATTRIB_ARRAY_BARRIER_BIT = 0x00000001;
